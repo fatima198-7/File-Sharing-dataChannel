@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>WebRTC File Sharing</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 20px;
+      }
+      textarea {
+        width: 100%;
+        height: 100px;
+        margin-top: 10px;
+      }
+      button {
+        margin: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>WebRTC File Sharing (Simple JS)</h2>
+
+    <input type="file" id="fileInput" />
+    <button id="sendFile">Send File</button>
+
+    <div style="margin-top: 10px">
+      <button id="createOffer">Create Offer</button>
+      <button id="createAnswer">Create Answer</button>
+      <button id="addAnswer">Add Answer</button>
+    </div>
+
+    <textarea id="offer" placeholder="Offer"></textarea>
+    <textarea id="answer" placeholder="Answer"></textarea>
+
+    <a id="downloadLink" href="#" download="received_file" style="display: none"
+      >Download Received File</a
+    >
+
+    <script>
+      // ==== VARIABLES ====
+      const fileInput = document.getElementById("fileInput");
+      const sendFileBtn = document.getElementById("sendFile");
+      const createOfferBtn = document.getElementById("createOffer");
+      const createAnswerBtn = document.getElementById("createAnswer");
+      const addAnswerBtn = document.getElementById("addAnswer");
+      const offerBox = document.getElementById("offer");
+      const answerBox = document.getElementById("answer");
+      const downloadLink = document.getElementById("downloadLink");
+
+      const pc = new RTCPeerConnection();
+      let dataChannel = null;
+      let receivedBuffers = [];
+
+      // ==== SETUP DATA CHANNEL ====
+      function setupDataChannel(channel) {
+        channel.onopen = () => console.log("Data channel open!");
+        channel.onmessage = (event) => {
+          receivedBuffers.push(event.data);
+          if (event.data === "EOF") {
+            const blob = new Blob(receivedBuffers);
+            const url = URL.createObjectURL(blob);
+            downloadLink.href = url;
+            downloadLink.style.display = "block";
+            receivedBuffers = [];
+            console.log("📥 File received!");
+          }
+        };
+      }
+
+      // ==== CREATE OFFER (Sender) ====
+      createOfferBtn.onclick = async () => {
+        dataChannel = pc.createDataChannel("fileChannel");
+        setupDataChannel(dataChannel);
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        offerBox.value = JSON.stringify(offer);
+        console.log("📤 Offer created!");
+      };
+
+      // ==== CREATE ANSWER (Receiver) ====
+      createAnswerBtn.onclick = async () => {
+        pc.ondatachannel = (event) => setupDataChannel(event.channel);
+
+        const offer = JSON.parse(offerBox.value);
+        await pc.setRemoteDescription(offer);
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        answerBox.value = JSON.stringify(answer);
+        console.log("📥 Answer created!");
+      };
+
+      // ==== ADD ANSWER (on sender) ====
+      addAnswerBtn.onclick = async () => {
+        const answer = JSON.parse(answerBox.value);
+        if (!pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(answer);
+          console.log("✅ Answer added!");
+        }
+      };
+
+      // ==== SEND FILE ====
+      sendFileBtn.onclick = () => {
+        const file = fileInput.files[0];
+        if (!file || !dataChannel) {
+          alert("No file or connection!");
+          return;
+        }
+
+        const chunkSize = 16384;
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          const buffer = e.target.result;
+          for (let i = 0; i < buffer.byteLength; i += chunkSize) {
+            dataChannel.send(buffer.slice(i, i + chunkSize));
+          }
+          dataChannel.send("EOF");
+          console.log("📤 File sent!");
+        };
+
+        reader.readAsArrayBuffer(file);
+      };
+    </script>
+  </body>
+</html>
