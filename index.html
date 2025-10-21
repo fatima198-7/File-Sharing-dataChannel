@@ -2,127 +2,141 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>WebRTC File Sharing</title>
-    <style>
-      body {
-        font-family: sans-serif;
-        padding: 20px;
-      }
-      textarea {
-        width: 100%;
-        height: 100px;
-        margin-top: 10px;
-      }
-      button {
-        margin: 5px;
-      }
-    </style>
+    <title>WebRTC File Share Fixed</title>
   </head>
   <body>
-    <h2>WebRTC File Sharing (Simple JS)</h2>
+    <h3>WebRTC File Share (Fixed)</h3>
 
     <input type="file" id="fileInput" />
     <button id="sendFile">Send File</button>
+    <br /><br />
 
-    <div style="margin-top: 10px">
-      <button id="createOffer">Create Offer</button>
-      <button id="createAnswer">Create Answer</button>
-      <button id="addAnswer">Add Answer</button>
-    </div>
+    <button id="createOffer">Create Offer</button>
+    <button id="createAnswer">Create Answer</button>
+    <button id="addAnswer">Add Answer</button>
 
-    <textarea id="offer" placeholder="Offer"></textarea>
-    <textarea id="answer" placeholder="Answer"></textarea>
+    <textarea id="offer" style="width: 100%; height: 100px"></textarea>
+    <textarea id="answer" style="width: 100%; height: 100px"></textarea>
 
-    <a id="downloadLink" href="#" download="received_file" style="display: none"
-      >Download Received File</a
+    <a id="downloadLink" href="#" download style="display: none"
+      >Download File</a
     >
 
     <script>
-      // ==== VARIABLES ====
-      const fileInput = document.getElementById("fileInput");
-      const sendFileBtn = document.getElementById("sendFile");
-      const createOfferBtn = document.getElementById("createOffer");
-      const createAnswerBtn = document.getElementById("createAnswer");
-      const addAnswerBtn = document.getElementById("addAnswer");
-      const offerBox = document.getElementById("offer");
-      const answerBox = document.getElementById("answer");
-      const downloadLink = document.getElementById("downloadLink");
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
 
-      const pc = new RTCPeerConnection();
-      let dataChannel = null;
+      let dataChannel;
       let receivedBuffers = [];
+      let fileMeta = null;
 
-      // ==== SETUP DATA CHANNEL ====
-      function setupDataChannel(channel) {
-        channel.onopen = () => console.log("Data channel open!");
-        channel.onmessage = (event) => {
-          receivedBuffers.push(event.data);
-          if (event.data === "EOF") {
-            const blob = new Blob(receivedBuffers);
-            const url = URL.createObjectURL(blob);
-            downloadLink.href = url;
-            downloadLink.style.display = "block";
-            receivedBuffers = [];
-            console.log("📥 File received!");
+      pc.onconnectionstatechange = () =>
+        console.log("Connection state:", pc.connectionState);
+      pc.oniceconnectionstatechange = () =>
+        console.log("ICE state:", pc.iceConnectionState);
+
+      // 🔹 Set up a data channel
+      function setupChannel(ch) {
+        ch.binaryType = "arraybuffer";
+        ch.onopen = () => console.log("Channel open!");
+        ch.onmessage = (event) => {
+          if (typeof event.data === "string") {
+            try {
+              const meta = JSON.parse(event.data);
+              if (meta.fileName) {
+                fileMeta = meta;
+                console.log("Receiving file:", meta.fileName);
+              }
+              if (meta.EOF) {
+                const blob = new Blob(receivedBuffers, {
+                  type: fileMeta?.type || "application/octet-stream",
+                });
+                const url = URL.createObjectURL(blob);
+                const link = document.getElementById("downloadLink");
+                link.href = url;
+                link.download = fileMeta?.fileName || "received_file";
+                link.style.display = "block";
+                console.log("File received:", blob.size, "bytes");
+                receivedBuffers = [];
+              }
+            } catch {
+              console.log("Unknown text message:", event.data);
+            }
+          } else {
+            receivedBuffers.push(event.data);
           }
         };
       }
 
-      // ==== CREATE OFFER (Sender) ====
-      createOfferBtn.onclick = async () => {
-        dataChannel = pc.createDataChannel("fileChannel");
-        setupDataChannel(dataChannel);
-
+      document.getElementById("createOffer").onclick = async () => {
+        dataChannel = pc.createDataChannel("file");
+        setupChannel(dataChannel);
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        offerBox.value = JSON.stringify(offer);
-        console.log("📤 Offer created!");
+        await new Promise(
+          (r) =>
+            (pc.onicegatheringstatechange = () =>
+              pc.iceGatheringState === "complete" && r())
+        );
+        document.getElementById("offer").value = JSON.stringify(
+          pc.localDescription
+        );
+        console.log("Offer ready!");
       };
 
-      // ==== CREATE ANSWER (Receiver) ====
-      createAnswerBtn.onclick = async () => {
-        pc.ondatachannel = (event) => setupDataChannel(event.channel);
-
-        const offer = JSON.parse(offerBox.value);
+      document.getElementById("createAnswer").onclick = async () => {
+        pc.ondatachannel = (e) => setupChannel(e.channel);
+        const offer = JSON.parse(document.getElementById("offer").value);
         await pc.setRemoteDescription(offer);
-
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-
-        answerBox.value = JSON.stringify(answer);
-        console.log("📥 Answer created!");
+        await new Promise(
+          (r) =>
+            (pc.onicegatheringstatechange = () =>
+              pc.iceGatheringState === "complete" && r())
+        );
+        document.getElementById("answer").value = JSON.stringify(
+          pc.localDescription
+        );
+        console.log("Answer ready!");
       };
 
-      // ==== ADD ANSWER (on sender) ====
-      addAnswerBtn.onclick = async () => {
-        const answer = JSON.parse(answerBox.value);
+      document.getElementById("addAnswer").onclick = async () => {
+        const answer = JSON.parse(document.getElementById("answer").value);
         if (!pc.currentRemoteDescription) {
           await pc.setRemoteDescription(answer);
-          console.log("✅ Answer added!");
+          console.log("Answer added!");
         }
       };
 
-      // ==== SEND FILE ====
-      sendFileBtn.onclick = () => {
-        const file = fileInput.files[0];
-        if (!file || !dataChannel) {
-          alert("No file or connection!");
+      // Send file with metadata
+      document.getElementById("sendFile").onclick = () => {
+        const f = document.getElementById("fileInput").files[0];
+        if (!f || !dataChannel || dataChannel.readyState !== "open") {
+          alert("Channel not ready!");
           return;
         }
 
-        const chunkSize = 16384;
         const reader = new FileReader();
-
         reader.onload = (e) => {
-          const buffer = e.target.result;
-          for (let i = 0; i < buffer.byteLength; i += chunkSize) {
-            dataChannel.send(buffer.slice(i, i + chunkSize));
-          }
-          dataChannel.send("EOF");
-          console.log("📤 File sent!");
-        };
+          const buf = e.target.result;
+          dataChannel.send(
+            JSON.stringify({ fileName: f.name, type: f.type, size: f.size })
+          );
 
-        reader.readAsArrayBuffer(file);
+          console.log("Sending file:", f.name, f.size, "bytes");
+
+          for (let i = 0; i < buf.byteLength; i += 16384) {
+            dataChannel.send(buf.slice(i, i + 16384));
+          }
+
+          setTimeout(
+            () => dataChannel.send(JSON.stringify({ EOF: true })),
+            300
+          );
+        };
+        reader.readAsArrayBuffer(f);
       };
     </script>
   </body>
